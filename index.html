@@ -83,6 +83,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:12.5px}
 details p,details li{font-size:12.5px}
 details ol{padding-left:18px;margin:6px 0}
 .nogo-on{outline:2px solid var(--accent)}
+.keybox{background:var(--chip);border-left:3px solid var(--accent);border-radius:8px;padding:7px 9px;margin:6px 0;font-size:12.5px;line-height:1.5}
+.loc{font-weight:600}
 .drop{width:16px;height:16px;border-radius:50%;background:#fff;border:1.5px solid #1e88e5;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 3px rgba(0,0,0,.35)}
 #main{position:relative}
 .slot{border:1px solid var(--line);border-radius:10px;padding:9px 10px;margin:8px 0;transition:border-color .15s,box-shadow .15s}
@@ -300,6 +302,13 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
       <div class="goals" id="goals"></div>
       <label>Distanza indicativa: <b id="goalKmLbl">60 km</b></label>
       <input id="goalKm" type="range" min="20" max="200" step="5" value="60" style="width:100%">
+      <label>Pendenza media delle salite</label>
+      <select id="goalGrade">
+        <option value="any">Indifferente</option>
+        <option value="soft">Salite dolci (fino al 4%)</option>
+        <option value="medium">Salite medie (4–7%)</option>
+        <option value="hard">Salite dure (oltre il 7%)</option>
+      </select>
       <label>Partenza</label>
       <div class="row"><div id="goalStart" class="hint" style="margin:0">–</div><button id="goalPickStart" style="flex:none">📍 Cambia</button></div>
       <button class="primary" id="goalGo" style="width:100%;margin-top:10px">✨ Proponimi dei giri</button>
@@ -601,7 +610,8 @@ function renderWaypoints(){
     m.addTo(wpLayer);
   };
   add('start', state.start, COLORS.start, 'P', 'Partenza');
-  if(state.mode==='p2p'){
+  // Outside the planner only home is shown, so no leftover arrival or stops
+  if(state.mode==='p2p' && currentView==='plan'){
     state.vias.forEach((v,i) => add({via:i}, v, COLORS.via, i+1, 'Tappa '+(i+1)));
     add('end', state.end, COLORS.end, 'A', 'Arrivo');
   }
@@ -684,6 +694,7 @@ async function generateLoop(){
   const target = Math.max(10, +$('#loopKm').value || 60) * 1000, dir = +$('#loopDir').value;
   // A loop chosen from the daily suggestions keeps its exact radius so it regenerates identically
   const keepK = state.loop.k && state.loop.km === target/1000 && state.loop.dir === dir ? state.loop.k : null;
+  const elevParam = keepK && state.loop.elev === 0 ? '&profile:consider_elevation=0' : '';
   state.loop = {km:target/1000, dir}; persist();
   const p = state.start, ll = p.lng.toFixed(6)+','+p.lat.toFixed(6);
   const seq = ++reqSeq;
@@ -691,13 +702,13 @@ async function generateLoop(){
   try{
     // BRouter's round-trip parameter is roughly a radius: the loop comes out ~5× longer. Calibrate with a second request.
     let k = keepK || target / 5.2;
-    let gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${state.loop.dir}`));
+    let gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${state.loop.dir}${elevParam}`));
     let len = +gj.features[0].properties['track-length'];
-    if(keepK){ state.loop.k = keepK; persist(); }
+    if(keepK){ state.loop.k = keepK; if(elevParam) state.loop.elev = 0; persist(); }
     else if(Math.abs(len-target)/target > 0.12 && seq === reqSeq){
       k = k * target / len;
       setStatus('Regolo la lunghezza dell\'anello…');
-      gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${state.loop.dir}`));
+      gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${state.loop.dir}${elevParam}`));
     }
     if(seq !== reqSeq) return;
     setRoute(parseRoute(gj)); setStatus('');
@@ -838,8 +849,13 @@ function analyze(r){
     else { if(e > rs[maxI]) maxI=i; if(rs[maxI]-e >= 30){ closeClimb(); inC=false; minI=i; } }
   }
   if(inC) closeClimb();
+  const climbKm = climbs.reduce((a,c) => a+c.len, 0);
+  const climbAvg = climbKm ? climbs.reduce((a,c) => a+c.gain, 0) / climbKm : 0;
+  // Steepest kilometre (20 samples of 50 m)
+  let steep = null;
+  for(let i=0;i+20<rs.length;i++){ const g = (rs[i+20]-rs[i])/1000; if(!steep || g > steep.g) steep = {from:i*step, to:(i+20)*step, g}; }
 
-  return {up, down, maxEle, minEle, maxGrade, secs, surfKm, roadKm, runs, warns, climbs};
+  return {up, down, maxEle, minEle, maxGrade, secs, surfKm, roadKm, runs, warns, climbs, climbKm, climbAvg, steep};
 }
 
 // ---------- Rendering ----------
@@ -1340,6 +1356,8 @@ function showView(v){
   const toggle = (layer, on) => on ? layer.addTo(map) : map.removeLayer(layer);
   toggle(routeLayer, v==='plan'); toggle(fountainLayer, v==='plan'); toggle(proposalLayer, v==='today'); toggle(diaryLayer, v==='diary'); toggle(wpLayer, v!=='diary');
   if(pick && (v==='diary' || (v==='today' && pick!=='start'))) setPick(null);
+  map.removeLayer(hoverMarker); $('#chartTip').style.display = 'none';
+  renderWaypoints();
   // Elevation chart and colour legend belong to the planner
   $('#chartWrap').style.display = v==='plan' ? '' : 'none';
   legend.getContainer().style.display = v==='plan' ? '' : 'none';
@@ -1391,82 +1409,131 @@ function metrics(r){
   return {
     km, up:s.up, upKm:s.up/km, maxGrade:s.maxGrade, climbs:s.climbs.length,
     bigClimb: s.climbs.reduce((a,c) => Math.max(a,c.gain), 0),
+    climbAvg: s.climbAvg,
     unpavedPct: ((s.surfKm.unpaved||0) + (s.surfKm.compact||0)*0.5) / r.total*100,
     mainPct: (s.roadKm.main||0) / r.total*100,
   };
+}
+
+// Desired average gradient of the climbs: [min, max] fraction, or null = indifferent
+const GRADE_PREFS = {any:null, soft:[0, 0.04], medium:[0.04, 0.07], hard:[0.07, 0.2]};
+let gradePref = store.get('gradePref', 'any');
+function gradePrefScore(m){
+  const range = GRADE_PREFS[gradePref];
+  if(!range) return 0;
+  if(!m.climbs) return gradePref==='soft' ? 0 : -25;          // no real climbs at all
+  const off = m.climbAvg < range[0] ? range[0]-m.climbAvg : m.climbAvg > range[1] ? m.climbAvg-range[1] : 0;
+  return -off*1000 - (gradePref==='soft' ? Math.max(0, m.maxGrade-0.08)*300 : 0);
 }
 
 async function propose(){
   if(!has(state.start)){ $('#goalStatus').textContent = 'Scegli prima la partenza.'; setPick('start'); return; }
   const g = GOALS.find(x => x.id===goalId), target = +$('#goalKm').value*1000;
   const ll = state.start.lng.toFixed(6)+','+state.start.lat.toFixed(6);
+  // For climbing days let the router ignore elevation, otherwise it steers around the hills
+  const elev = (g.id==='salita' || gradePref==='medium' || gradePref==='hard') ? 0 : 1;
+  const elevParam = elev ? '' : '&profile:consider_elevation=0';
   const seq = ++propSeq, k = target/5.2, queue = DIRS.slice(), results = [];
   proposals = []; proposalLayer.clearLayers(); $('#proposals').innerHTML = '';
-  let done = 0;
+  let done = 0, lastErr = '';
   const status = () => $('#goalStatus').textContent = `Provo gli anelli nelle varie direzioni… ${done}/${DIRS.length}`;
   status(); $('#goalGo').disabled = true;
   async function worker(){
     while(queue.length){
       const [name, dir] = queue.shift();
       try{
-        const req = kk => fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(kk)}&direction=${dir}`));
+        const req = kk => fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(kk)}&direction=${dir}${elevParam}`));
         let kk = k, gj = await req(kk);
         // The radius→length ratio varies a lot with terrain: re-aim once per direction
         const len = +gj.features[0].properties['track-length'];
         if(Math.abs(len-target)/target > 0.15 && seq === propSeq){ kk = kk*target/len; gj = await req(kk); }
         if(seq !== propSeq) return;
         const r = parseRoute(gj); r.stats = analyze(r);
-        results.push({name, dir, k:Math.round(kk), r, m:metrics(r)});
+        results.push({name, dir, k:Math.round(kk), elev, r, m:metrics(r)});
       }catch(e){ lastErr = e.message; }
       done++; if(seq === propSeq) status();
     }
   }
-  let lastErr = '';
   await Promise.all([worker(), worker()]);
   if(seq !== propSeq) return;
   $('#goalGo').disabled = false;
   if(!results.length){ $('#goalStatus').textContent = lastErr || 'Il server dei percorsi non risponde: riprova tra poco.'; return; }
   results.forEach(x => {
-    x.score = g.score(x.m) - x.m.unpavedPct*1.5 - x.m.mainPct*0.3 - Math.abs(x.m.km*1000-target)/target*40;
+    x.score = g.score(x.m) + gradePrefScore(x.m) - x.m.unpavedPct*1.5 - x.m.mainPct*0.3 - Math.abs(x.m.km*1000-target)/target*40;
   });
   results.sort((a,b) => b.score-a.score);
   proposals = results.slice(0,4);
-  $('#goalStatus').textContent = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}”.`;
+  const pl = $('#goalGrade').selectedOptions[0].textContent.toLowerCase();
+  $('#goalStatus').textContent = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}”` + (gradePref !== 'any' ? `, ${pl}.` : '.');
+  if(gradePref !== 'any' && !proposals.some(p => p.m.climbs && gradePrefScore(p.m) === 0))
+    $('#goalStatus').textContent += ' Nessun anello trovato rispetta esattamente la pendenza scelta: ecco i più vicini.';
   renderProposals(g);
 }
 
 function proposalWhy(g, p){
-  const m = p.m, c = p.r.stats.climbs.slice().sort((a,b) => b.gain-a.gain)[0];
-  const climbTxt = c ? `salita principale ${(c.len/1000).toFixed(1).replace('.',',')} km al ${(c.avg*100).toFixed(1).replace('.',',')}% (+${Math.round(c.gain)} m)` : '';
-  if(g.id==='salita') return c ? climbTxt[0].toUpperCase() + climbTxt.slice(1) + '.' : 'Mosso, ma senza salite lunghe.';
+  const m = p.m;
   if(g.id==='scarico') return `Pendenza media di ${m.upKm.toFixed(0)} m per km: gambe leggere.`;
   if(g.id==='pianura') return `Solo ${Math.round(m.up)} m di dislivello in ${m.km.toFixed(0)} km.`;
-  if(g.id==='collinare') return `${m.climbs} salite brevi` + (c ? `, la più dura: ${climbTxt}.` : '.');
+  if(g.id==='collinare') return m.climbs===1 ? 'Una salita breve lungo il giro.' : `${m.climbs} salite brevi lungo il giro.`;
+  if(g.id==='salita') return m.climbs ? `${m.climbs===1 ? '1 salita' : m.climbs+' salite'}, ${Math.round(m.up)} m di dislivello in tutto.` : 'Mosso, ma senza salite lunghe.';
   return `Dislivello regolare (${m.upKm.toFixed(0)} m/km), adatto a tenere il ritmo.`;
 }
 
-function renderProposals(g){
-  proposalLayer.clearLayers(); propLines = [];
-  proposals.slice().reverse().forEach((p, ri) => {
-    const i = proposals.length-1-ri;
-    const line = L.polyline(p.r.pts.map(q => [q.lat,q.lng]), {color:PROP_COLORS[i], weight:i===0?6:4, opacity:i===0?.95:.7});
-    line.on('click', () => highlightProposal(i));
-    line.addTo(proposalLayer); propLines[i] = line;
+// ---------- Place names for climbs (Nominatim, max 1 request/second, cached) ----------
+const placeCache = store.get('placeNames', {});
+let placeQueue = Promise.resolve();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function placeName(lat, lng){
+  const key = lat.toFixed(3)+','+lng.toFixed(3);
+  if(placeCache[key]) return Promise.resolve(placeCache[key]);
+  const p = placeQueue.then(async () => {
+    if(placeCache[key]) return placeCache[key];
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=14&lat=${lat}&lon=${lng}`, {headers:{'Accept-Language':'it'}});
+    const a = (await r.json()).address || {};
+    const loc = a.hamlet || a.village || a.suburb || a.quarter || a.neighbourhood || a.town || a.city || a.municipality || '';
+    const com = a.city || a.town || a.village || a.municipality || '';
+    const name = loc && com && loc !== com ? `${loc} (${com})` : (loc || com || 'località sconosciuta');
+    placeCache[key] = name; store.set('placeNames', placeCache);
+    return name;
   });
-  if(proposals.length) map.fitBounds(L.featureGroup(propLines.filter(Boolean)).getBounds(), {padding:[30,30]});
+  placeQueue = p.then(() => sleep(1100), () => sleep(1100));
+  return p.catch(() => 'località sconosciuta');
+}
+// Fill every <span class="loc" data-ll="lat,lng"> inside el, in document order
+function fillPlaces(el){
+  el.querySelectorAll('.loc[data-ll]').forEach(s => {
+    const [lat, lng] = s.dataset.ll.split(',').map(Number);
+    placeName(lat, lng).then(n => s.textContent = n);
+  });
+}
+const locSpan = (r, d) => { const [lat,lng] = latlngAt(r, d); return `<span class="loc" data-ll="${lat.toFixed(5)},${lng.toFixed(5)}">…</span>`; };
+
+function keyClimbHTML(r){
+  const s = r.stats, c = s.climbs.slice().sort((a,b) => b.gain-a.gain)[0];
+  let h = '';
+  if(c) h += `<div class="keybox">⛰️ <b>Salita principale</b>: dal km ${kmTxt(c.from)} al km ${kmTxt(c.to)}, da ${locSpan(r, c.from)} a ${locSpan(r, c.to)}<br>${kmTxt(c.len)} km al ${(c.avg*100).toFixed(1).replace('.',',')}% · +${Math.round(c.gain)} m · punte del ${(c.max*100).toFixed(0)}%</div>`;
+  if(s.steep && s.steep.g >= 0.04) h += `<div class="keybox">📈 <b>Chilometro più ripido</b>: dal km ${kmTxt(s.steep.from)} al km ${kmTxt(s.steep.to)} al ${(s.steep.g*100).toFixed(1).replace('.',',')}%, verso ${locSpan(r, s.steep.to)}</div>`;
+  return h;
+}
+
+function renderProposals(g){
+  // One route on the map at a time: the recommended one first, then whichever card is clicked
+  propLines = proposals.map((p,i) => L.polyline(p.r.pts.map(q => [q.lat,q.lng]), {color:PROP_COLORS[i], weight:6, opacity:.95}));
   $('#proposals').innerHTML = proposals.map((p,i) => {
     const m = p.m, s = p.r.stats;
     const asph = ((s.surfKm.asphalt||0)+(s.surfKm.assumed||0))/p.r.total*100;
     const tags = [
+      m.climbs ? `<span class="tag">Salite in media al ${(m.climbAvg*100).toFixed(1).replace('.',',')}%</span>` : '',
+      `<span class="tag">Pendenza max ${(m.maxGrade*100).toFixed(0)}%</span>`,
       `<span class="tag">Asfalto ${Math.round(asph)}%</span>`,
       m.unpavedPct >= 0.5 ? `<span class="tag">Sterrato ${m.unpavedPct.toFixed(0)}%</span>` : '',
-      `<span class="tag">Pendenza max ${(m.maxGrade*100).toFixed(0)}%</span>`,
       m.mainPct >= 3 ? `<span class="tag">Strade principali ${m.mainPct.toFixed(0)}%</span>` : '',
     ].join('');
     return `<div class="prop ${i===0?'hl':''}" data-i="${i}">
       <div class="top"><span class="dot" style="background:${PROP_COLORS[i]}"></span><b>Anello verso ${p.name}</b>${i===0?'<span class="tag best">Consigliato</span>':''}</div>
       <div class="meta">${m.km.toFixed(1).replace('.',',')} km · +${Math.round(m.up)} m · ${fmtTime(s.secs)} · ${m.upKm.toFixed(0)} m/km</div>
       <div>${tags}</div>
+      ${keyClimbHTML(p.r)}
       <p class="hint" style="margin:2px 0 6px">${esc(proposalWhy(g,p))}</p>
       <button class="primary" data-use="${i}">Usa questo giro</button>
     </div>`;
@@ -1475,17 +1542,20 @@ function renderProposals(g){
     const i = +el.dataset.i;
     if(e.target.dataset.use != null) useProposal(i, g); else highlightProposal(i, true);
   });
+  fillPlaces($('#proposals'));
+  if(proposals.length) highlightProposal(0, true);
 }
 function highlightProposal(i, zoom){
-  propLines.forEach((l,j) => l && l.setStyle({weight:j===i?7:3, opacity:j===i?1:.45}));
-  propLines[i].bringToFront();
+  proposalLayer.clearLayers();
+  if(!propLines[i]) return;
+  propLines[i].addTo(proposalLayer);
   document.querySelectorAll('.prop').forEach(el => el.classList.toggle('hl', +el.dataset.i===i));
   if(zoom) map.fitBounds(propLines[i].getBounds(), {padding:[30,30]});
 }
 function useProposal(i, g){
   const p = proposals[i];
   state.mode = 'loop';
-  state.loop = {km:+$('#goalKm').value, dir:p.dir, k:p.k};
+  state.loop = {km:+$('#goalKm').value, dir:p.dir, k:p.k, elev:p.elev};
   $('#rname').value = `${g.label} – anello verso ${p.name}`;
   persist(); syncControls(); setPick(null); renderWaypoints();
   showView('plan');
@@ -1494,6 +1564,8 @@ function useProposal(i, g){
   setStatus('Giro proposto caricato: puoi scaricare il GPX, salvarlo o modificarlo.');
 }
 $('#goalGo').onclick = propose;
+$('#goalGrade').value = gradePref;
+$('#goalGrade').onchange = e => { gradePref = e.target.value; store.set('gradePref', gradePref); };
 
 // ---------- Diario ----------
 const RATINGS = [['difficulty','💪 Difficoltà','Difficoltà'],['beauty','🏞️ Bellezza / panorama','Bellezza'],['road','🛣️ Qualità asfalto','Asfalto'],['safety','🚗 Sicurezza / poco traffico','Sicurezza'],['legs','🦵 Sensazioni / gambe','Gambe']];
