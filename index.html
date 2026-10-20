@@ -530,6 +530,12 @@ const pickKey = k => (k && typeof k === 'object') ? 'via'+k.via : k;
 function setPointValue(key, p){
   if(key==='start') state.start = p; else if(key==='end') state.end = p; else state.vias[key.via] = p;
 }
+function getPoint(key){ return key==='start' ? state.start : key==='end' ? state.end : state.vias[key.via]; }
+function clearPoint(key){
+  // A cleared stop keeps its (empty) box so a new place can be typed in
+  setPointValue(key, key==='start' || key==='end' ? null : {lat:null, lng:null});
+  changed();
+}
 
 function slotHTML(id, title, color, badge, p, extra){
   const active = pickKey(pick) === id;
@@ -543,12 +549,13 @@ function slotHTML(id, title, color, badge, p, extra){
 
 function renderSlots(){
   renderGoalStart();
-  $('#slotStart').innerHTML = slotHTML('start', state.mode==='loop' ? 'Partenza (e arrivo)' : 'Partenza', COLORS.start, 'P', state.start);
+  const clearBtn = (k, p) => has(p) ? `<button class="mini" data-clear="${k}" title="Cancella">✕</button>` : '';
+  $('#slotStart').innerHTML = slotHTML('start', state.mode==='loop' ? 'Partenza (e arrivo)' : 'Partenza', COLORS.start, 'P', state.start, clearBtn('start', state.start));
   $('#viaList').innerHTML = state.vias.map((v,i) => slotHTML('via'+i, 'Tappa '+(i+1), COLORS.via, i+1, v,
     (i>0 ? `<button class="mini" data-up="${i}" title="Sposta su">↑</button>` : '') +
     (i<state.vias.length-1 ? `<button class="mini" data-down="${i}" title="Sposta giù">↓</button>` : '') +
     `<button class="mini" data-del="${i}" title="Rimuovi tappa">✕</button>`)).join('');
-  $('#slotEnd').innerHTML = slotHTML('end', state.returnHome ? 'Arrivo <small>poi rientro a casa 🏠</small>' : 'Arrivo', COLORS.end, 'A', state.end);
+  $('#slotEnd').innerHTML = slotHTML('end', state.returnHome ? 'Arrivo <small>poi rientro a casa 🏠</small>' : 'Arrivo', COLORS.end, 'A', state.end, clearBtn('end', state.end));
   $('#returnHome').checked = !!state.returnHome;
   document.querySelectorAll('[data-slot]').forEach(el => {
     const id = el.dataset.slot, key = id.startsWith('via') ? {via:+id.slice(3)} : id;
@@ -556,6 +563,13 @@ function renderSlots(){
     const q = el.querySelector('.q');
     q.addEventListener('focus', () => q.select());
     q.addEventListener('keydown', e => { if(e.key==='Enter') searchFor(key, q.value, el.querySelector('.results')); });
+    // Emptying the field removes the place, keeping the cursor there to type a new one
+    q.addEventListener('input', () => {
+      if(q.value.trim() || !has(getPoint(key))) return;
+      clearPoint(key);
+      const again = document.querySelector(`[data-slot="${id}"] .q`); if(again) again.focus();
+    });
+    const cb = el.querySelector('[data-clear]'); if(cb) cb.onclick = () => clearPoint(key);
   });
   const vl = $('#viaList');
   vl.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { state.vias.splice(+b.dataset.del,1); if(pick && pick.via!=null) setPick(null); changed(); });
@@ -641,8 +655,18 @@ map.on('click', e => {
 
 // ---------- Routing ----------
 let timer = null;
+const HOME_VIEW = [[44.95, 7.85], 8];   // whole of Piemonte
 function changed(){
   persist(); renderWaypoints();
+  if(!has(state.start)){
+    // Without a start there is no route and no daily suggestions
+    clearTimeout(timer); reqSeq++; clearRoute();
+    proposals = []; propSeq++; proposalLayer.clearLayers();
+    $('#proposals').innerHTML = '<p class="hint">Scegli la partenza e premi “Proponimi dei giri”.</p>'; $('#goalStatus').textContent = '';
+    if(!has(state.end) && !state.vias.some(has)){ setStatus(''); map.setView(...HOME_VIEW); }
+    else setStatus('Manca la partenza (Passo 1).');
+    return;
+  }
   if(state.mode==='loop'){ if(route) generateLoop(); return; }
   clearTimeout(timer); timer = setTimeout(computeP2P, 350);
 }
