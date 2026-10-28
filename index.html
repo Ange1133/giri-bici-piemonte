@@ -99,6 +99,7 @@ details ol{padding-left:18px;margin:6px 0}
 .nogo-on{outline:2px solid var(--accent)}
 .keybox{background:var(--chip);border-left:3px solid var(--accent);border-radius:8px;padding:7px 9px;margin:6px 0;font-size:12.5px;line-height:1.5}
 .loc{font-weight:600}
+.gray-tiles{filter:grayscale(1) brightness(1.04) contrast(.92)}
 .drop{width:16px;height:16px;border-radius:50%;background:#fff;border:1.5px solid #1e88e5;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 3px rgba(0,0,0,.35)}
 #main{position:relative}
 .slot{border:1px solid var(--line);border-radius:10px;padding:9px 10px;margin:8px 0;transition:border-color .15s,box-shadow .15s}
@@ -120,8 +121,9 @@ details ol{padding-left:18px;margin:6px 0}
 #addVia{width:100%;border-style:dashed;margin-top:4px}
 .check{display:flex;gap:7px;align-items:center;font-size:13px;color:var(--text);margin:8px 0 2px;cursor:pointer}
 .check input{width:auto;margin:0}
-#pickBanner{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:var(--accent);color:#fff;padding:8px 10px 8px 14px;border-radius:999px;box-shadow:0 3px 10px rgba(0,0,0,.3);font-weight:600;display:none;align-items:center;gap:10px;white-space:nowrap;max-width:calc(100% - 120px)}
-#pickBanner button{background:rgba(255,255,255,.2);border:none;color:#fff;padding:3px 10px;border-radius:999px}
+#pickBanner{position:absolute;top:10px;left:54px;right:54px;margin:0 auto;max-width:440px;z-index:1000;background:var(--accent);color:#fff;padding:8px 8px 8px 12px;border-radius:14px;box-shadow:0 3px 10px rgba(0,0,0,.3);font-weight:600;font-size:13.5px;line-height:1.3;display:none;align-items:center;gap:8px}
+#pickBanner span{flex:1;min-width:0}
+#pickBanner button{flex:none;background:rgba(255,255,255,.22);border:none;color:#fff;padding:5px 10px;border-radius:999px;font-size:13px}
 .views{display:flex;gap:4px;position:sticky;top:-14px;z-index:5;background:var(--panel);padding:8px 0;margin:0 0 4px;border-bottom:1px solid var(--line)}
 .views button{flex:1;border:none;background:transparent;border-radius:8px;padding:8px 4px;font-weight:600;color:var(--muted)}
 .views button.on{background:var(--chip);color:var(--text)}
@@ -163,6 +165,9 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
 .entry .acts button{padding:3px 8px;font-size:12px}
 #map.picking, #map.picking .leaflet-grab, #map.picking .leaflet-interactive{cursor:crosshair !important}
 @media (max-width:820px){
+  .legend{font-size:10.5px;line-height:1.35;padding:5px 7px}
+  .legend select{font-size:11px}
+  .legend .sw{width:8px;height:8px;margin-right:4px}
   body{flex-direction:column;overflow:auto;height:auto}
   #main{order:1;height:auto}
   #map{height:58vh;flex:none}
@@ -285,7 +290,8 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
     <label>Nome del giro</label>
     <input id="rname" type="text" placeholder="es. Langhe da Alba">
     <div class="row" style="margin-top:8px"><button class="primary" id="gpx" disabled>⬇ Scarica GPX</button><button id="save" disabled>💾 Salva</button></div>
-    <button id="shareGpx" disabled hidden style="width:100%;margin-top:6px">📤 Invia il GPX a iGPSport o a un'altra app</button>
+    <button id="shareGpx" class="primary" disabled hidden style="width:100%;margin-top:6px">📲 Manda il percorso a iGPSport</button>
+    <p class="hint" id="igpsHelp" hidden></p>
     <button id="toDiary" disabled style="width:100%;margin-top:6px">📒 L'ho fatto: registralo nel diario</button>
     <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="waterGpx" type="checkbox" style="width:auto" checked> 💧 Includi le fontane nel file (al massimo una ogni 2 km)</label>
     <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input id="simplify" type="checkbox" style="width:auto"> Riduci i punti della traccia (file più leggero)</label>
@@ -413,6 +419,7 @@ const store = {
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
 };
 const $ = s => document.querySelector(s);
+const TOUCH = matchMedia('(pointer: coarse)').matches;   // phone or tablet: "tocca" instead of "clicca"
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // ---------- Classifications ----------
@@ -471,15 +478,16 @@ function parseTags(str){
 // ---------- Map ----------
 const map = L.map('map', {zoomControl:true}).setView([44.95, 7.85], 8);
 const tiles = {
-  'Stradale (OpenStreetMap)': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}),
+  'Mappa grigia (OpenStreetMap)': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap', className:'gray-tiles'}),
+  'Stradale a colori (OpenStreetMap)': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}),
   'Ciclabile (CyclOSM)': L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap, CyclOSM'}),
   'Topografica (OpenTopoMap)': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {maxZoom:17, attribution:'© OpenStreetMap, SRTM, © OpenTopoMap'}),
   'Satellite (Esri)': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19, attribution:'© Esri'}),
 };
-const savedTile = store.get('tile', 'Ciclabile (CyclOSM)');
-(tiles[savedTile] || tiles['Ciclabile (CyclOSM)']).addTo(map);
+const savedTile = store.get('tile2', 'Mappa grigia (OpenStreetMap)');
+(tiles[savedTile] || tiles['Mappa grigia (OpenStreetMap)']).addTo(map);
 L.control.layers(tiles, null, {position:'topright'}).addTo(map);
-map.on('baselayerchange', e => store.set('tile', e.name));
+map.on('baselayerchange', e => store.set('tile2', e.name));
 L.control.scale({imperial:false}).addTo(map);
 
 const routeLayer = L.layerGroup().addTo(map);
@@ -564,7 +572,7 @@ function slotHTML(id, title, color, badge, p, extra){
     <div class="slot-head"><span class="badge" style="background:${color}">${badge}</span><b>${title}</b>${has(p)?'<span class="done">✓ impostata</span>':''}${extra||''}</div>
     <input type="text" class="q" placeholder="Scrivi un luogo e premi Invio…" value="${has(p) ? esc(p.name || (p.lat.toFixed(4)+', '+p.lng.toFixed(4))) : ''}">
     <div class="results"></div>
-    <button class="pick ${active?'on':''}">${active ? '👆 Ora clicca sulla mappa…' : '📍 Seleziona sulla mappa'}</button>
+    <button class="pick ${active?'on':''}">${active ? (TOUCH ? '👆 Ora tocca la mappa…' : '👆 Ora clicca sulla mappa…') : '📍 Seleziona sulla mappa'}</button>
   </div>`;
 }
 
@@ -602,8 +610,8 @@ function setPick(key){
   pick = key;
   if(key && addingNogo) toggleNogo(false);
   if(key){
-    const what = key==='start' ? 'la PARTENZA' : key==='end' ? "l'ARRIVO" : 'la TAPPA '+(key.via+1);
-    $('#pickText').textContent = '👆 Clicca sulla mappa per scegliere ' + what;
+    const what = key==='start' ? 'la partenza' : key==='end' ? "l'arrivo" : 'la tappa '+(key.via+1);
+    $('#pickText').textContent = '📍 ' + (TOUCH ? 'Tocca' : 'Clicca') + ' la mappa per scegliere ' + what;
     $('#pickBanner').style.display = 'flex';
   } else $('#pickBanner').style.display = 'none';
   $('#map').classList.toggle('picking', !!key || addingNogo);
@@ -1147,6 +1155,25 @@ async function computeP2P(){
   }catch(e){ if(seq === reqSeq){ setStatus(e.message, true); } }
 }
 
+// BRouter's round-trip parameter is a radius-like number, not a length, and the ratio between the two
+// changes a lot with terrain. Home in on the requested length (within 6%) with up to three requests.
+const LOOP_TOLERANCE = 0.06;
+async function loopToLength(ll, dir, target, extra, k0, stale){
+  const req = k => fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${dir}${extra}`));
+  let k = k0, gj = await req(k), len = +gj.features[0].properties['track-length'];
+  let best = {gj, k, len}, prev = null;
+  for(let i=0; i<2 && Math.abs(len-target)/target > LOOP_TOLERANCE && !(stale && stale()); i++){
+    // Secant step once we have two tries, proportional step before that
+    let nk = prev && prev.len !== len ? k + (target-len)*(k-prev.k)/(len-prev.len) : k*target/len;
+    if(!isFinite(nk) || nk <= 0) nk = k*target/len;
+    nk = Math.min(Math.max(nk, k*0.4), k*2.5);
+    prev = {k, len}; k = nk;
+    gj = await req(k); len = +gj.features[0].properties['track-length'];
+    if(Math.abs(len-target) < Math.abs(best.len-target)) best = {gj, k, len};
+  }
+  return best;
+}
+
 async function generateLoop(){
   if(!has(state.start)){ setStatus('Prima scegli la partenza (Passo 1).', true); setPick('start'); return; }
   const target = Math.max(10, +$('#loopKm').value || 60) * 1000, dir = +$('#loopDir').value;
@@ -1158,15 +1185,12 @@ async function generateLoop(){
   const seq = ++reqSeq;
   setStatus('Genero l\'anello…');
   try{
-    // BRouter's round-trip parameter is roughly a radius: the loop comes out ~5× longer. Calibrate with a second request.
-    let k = keepK || target / 5.2;
-    let gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${state.loop.dir}${elevParam}`));
-    let len = +gj.features[0].properties['track-length'];
-    if(keepK){ state.loop.k = keepK; if(elevParam) state.loop.elev = 0; persist(); }
-    else if(Math.abs(len-target)/target > 0.12 && seq === reqSeq){
-      k = k * target / len;
-      setStatus('Regolo la lunghezza dell\'anello…');
-      gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(k)}&direction=${state.loop.dir}${elevParam}`));
+    let gj;
+    if(keepK){
+      gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(keepK)}&direction=${dir}${elevParam}`));
+      state.loop.k = keepK; if(elevParam) state.loop.elev = 0; persist();
+    } else {
+      gj = (await loopToLength(ll, dir, target, '', target/5.2, () => seq !== reqSeq)).gj;
     }
     if(seq !== reqSeq) return;
     setRoute(parseRoute(gj)); setStatus('');
@@ -1344,7 +1368,8 @@ function drawRoute(){
   if(!route) return;
   const P = route.pts;
   const all = P.map(p => [p.lat,p.lng]);
-  L.polyline(all, {color:'#fff', weight:9, opacity:.9, interactive:false}).addTo(routeLayer);
+  L.polyline(all, {color:'#1d2330', weight:12, opacity:.35, interactive:false}).addTo(routeLayer);
+  L.polyline(all, {color:'#fff', weight:9, opacity:1, interactive:false}).addTo(routeLayer);
   // Group consecutive segments with the same colour key
   const keyOf = i => colorBy==='surface' ? route.surf[route.seg[i]] : colorBy==='road' ? route.road[route.seg[i]] : gradeClass(route.grade[i]);
   const colOf = k => colorBy==='surface' ? SURF[k].color : colorBy==='road' ? ROAD[k].color : GRADE[k].color;
@@ -1352,7 +1377,7 @@ function drawRoute(){
   for(let i=2;i<=P.length;i++){
     const k = i<P.length ? keyOf(i) : null;
     if(k !== cur){
-      const line = L.polyline(all.slice(start, i), {color:colOf(cur), weight:5, opacity:1}).addTo(routeLayer);
+      const line = L.polyline(all.slice(start, i), {color:colOf(cur), weight:6, opacity:1}).addTo(routeLayer);
       line.on('click', onRouteClick);
       start = i-1; cur = k;
     }
@@ -1544,16 +1569,33 @@ function downloadGpx(){
   saveFile(g.text, 'application/gpx+xml', g.file);
   setStatus(`GPX scaricato (${g.info}).`);
 }
-// On phones: hand the GPX straight to another app (iGPSport, Strava…) through the share sheet
-const gpxFileFor = g => new File([g.text], g.file, {type:'application/gpx+xml'});
-const canShareGpx = (() => { try{ return !!(navigator.canShare && navigator.canShare({files:[gpxFileFor({text:'', file:'x.gpx'})]})); }catch(e){ return false; } })();
+// On phones: hand the GPX to iGPSport through the share sheet. Browsers are picky about which
+// file types they let you share, so try the GPX type, then a generic one, and if the phone still
+// refuses, save the file and explain the import in iGPSport.
+const shareTypes = ['application/gpx+xml', 'application/octet-stream'];
+const shareable = file => { try{ return !!(navigator.canShare && navigator.canShare({files:[file]})); }catch(e){ return false; } };
+function igpsportHelp(saved){
+  $('#igpsHelp').hidden = false;
+  $('#igpsHelp').innerHTML = (saved ? '<b>✅ GPX salvato sul telefono.</b> ' : '') +
+    'Per caricarlo sul ciclocomputer: apri l\'app <b>iGPSport</b> → <b>Percorsi</b> → <b>Importa</b> (o “+”) → scegli il file <b>' + esc(buildGpx().file) + '</b> dalla cartella <b>Download</b> / <b>File</b>, poi sincronizza il ciclocomputer.';
+}
 async function shareGpx(){
   if(!route) return;
   const g = buildGpx();
-  try{
-    await navigator.share({files:[gpxFileFor(g)], title:routeName()});
-    setStatus('GPX condiviso.');
-  }catch(e){ if(e.name !== 'AbortError') setStatus('Condivisione non riuscita: usa “Scarica GPX”.', true); }
+  for(const type of shareTypes){
+    const file = new File([g.text], g.file, {type});
+    if(!shareable(file)) continue;
+    try{
+      await navigator.share({files:[file]});
+      setStatus('GPX inviato: nell\'elenco delle app scegli iGPSport.');
+      return;
+    }catch(e){
+      if(e.name === 'AbortError') return;   // the user closed the share sheet
+    }
+  }
+  // Sharing not possible here: save the file instead and show how to import it
+  saveFile(g.text, 'application/gpx+xml', g.file);
+  igpsportHelp(true);
 }
 
 // TCX "course" with Water course points: the format many bike computers use for on-route alerts
@@ -1929,15 +1971,11 @@ async function propose(){
       while(queue.length){
         const job = queue.shift();
         try{
-          const req = kk => fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(kk)}&direction=${job.dir}${elevParam}`));
           // Ignoring elevation the loops follow the valleys and come out about twice as long
-          let kk = job.target/(elev ? 5.2 : 9), gj = await req(kk);
-          // The radius→length ratio varies a lot with terrain: re-aim once per direction
-          const len = +gj.features[0].properties['track-length'];
-          if(Math.abs(len-job.target)/job.target > 0.15 && seq === propSeq){ kk = kk*job.target/len; gj = await req(kk); }
+          const fit = await loopToLength(ll, job.dir, job.target, elevParam, job.target/(elev ? 5.2 : 9), () => seq !== propSeq);
           if(seq !== propSeq) return;
-          const r = parseRoute(gj); r.stats = analyze(r);
-          results.push({name:job.name, dir:job.dir, target:job.target, k:Math.round(kk), elev, r, m:metrics(r)});
+          const r = parseRoute(fit.gj); r.stats = analyze(r);
+          results.push({name:job.name, dir:job.dir, target:job.target, k:Math.round(fit.k), elev, r, m:metrics(r)});
         }catch(e){ lastErr = e.message; failed.push(job); }
         done++; if(seq === propSeq) status();
       }
@@ -1950,37 +1988,25 @@ async function propose(){
   await run(DIRS.map(([name, dir]) => ({name, dir, target})), 'Provo gli anelli nelle varie direzioni…');
   if(seq !== propSeq) return;
 
-  // Climbing day: if too few loops reach the minimum climbing, stretch the hilliest directions
-  let stretched = false;
-  if(minUp && results.length && results.filter(x => x.m.up >= minUp).length < 2){
-    const hilly = results.slice().sort((a,b) => b.m.upKm-a.m.upKm).slice(0,4);
-    const jobs = hilly.map(x => ({name:x.name, dir:x.dir, target:Math.min(200000, Math.max(target*1.15, Math.min(target*2, minUp/Math.max(x.m.upKm,1)*1000*1.1)))}));
-    stretched = true;
-    await run(jobs, `Cerco giri con almeno ${minUp} m di dislivello…`);
-    if(seq !== propSeq) return;
-  }
-
   $('#goalGo').disabled = false;
   if(!results.length){ $('#goalStatus').textContent = lastErr || 'Il server dei percorsi non risponde: riprova tra poco.'; return; }
   results.forEach(x => {
     x.score = g.score(x.m) + gradePrefScore(x.m)
       - (minUp && x.m.up < minUp ? 20 + (minUp - x.m.up)/15 : 0)      // below the minimum climbing
       - x.m.busyPct*2 - x.m.unpavedPct*4
-      - Math.abs(x.m.km*1000 - x.target)/x.target*40;
+      - Math.abs(x.m.km*1000 - target)/target*60;
   });
   results.sort((a,b) => b.score-a.score);
-  // A stretched loop that still misses the minimum climbing is just longer, not better
-  const useful = results.filter(x => !(x.target > target && x.m.up < minUp));
-  // Same direction twice (normal + stretched): keep only the better one
-  proposals = useful.filter((x,i) => useful.findIndex(y => y.dir === x.dir) === i).slice(0,4);
+  // The requested distance is a promise: show only loops within ±10% whenever there are any
+  const near = x => Math.abs(x.m.km*1000 - target)/target <= 0.10;
+  const inRange = results.filter(near);
+  proposals = (inRange.length ? inRange : results).slice(0,4);
 
   const pl = $('#goalGrade').selectedOptions[0].textContent.toLowerCase();
-  let msg = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}”` + (gradePref !== 'any' ? `, ${pl}.` : '.');
-  if(minUp){
-    const ok = proposals.filter(p => p.m.up >= minUp).length;
-    if(!ok) msg += ` Nessun anello arriva a ${minUp} m di dislivello partendo da qui: ecco i più vicini. Prova ad aumentare la distanza o a partire più vicino alle montagne.`;
-    else if(stretched && proposals.some(p => p.target > target)) msg += ` Per superare i ${minUp} m di dislivello ho allungato alcuni giri.`;
-  }
+  let msg = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}” da circa ${target/1000} km` + (gradePref !== 'any' ? `, ${pl}.` : '.');
+  if(!inRange.length) msg += ` Nessun anello è venuto entro il 10% dei ${target/1000} km richiesti: ecco i più vicini.`;
+  if(minUp && !proposals.some(p => p.m.up >= minUp))
+    msg += ` Con ${target/1000} km nessun anello arriva a ${minUp} m di dislivello partendo da qui: ecco i più vicini. Prova ad aumentare la distanza o a partire più vicino alle montagne.`;
   if(gradePref !== 'any' && !proposals.some(p => p.m.climbs && gradePrefScore(p.m) === 0))
     msg += ' Nessun anello trovato rispetta esattamente la pendenza scelta: ecco i più vicini.';
   $('#goalStatus').textContent = msg;
@@ -2343,7 +2369,7 @@ if(isIOS && /^https?:$/.test(location.protocol)) showInstall('Per installarla: t
 $('#installClose').onclick = () => { $('#installBox').hidden = true; store.set('installDismissed', true); };
 
 // Share sheet for the GPX, where the phone supports sharing files
-$('#shareGpx').hidden = !canShareGpx;
+$('#shareGpx').hidden = !TOUCH;
 $('#shareGpx').onclick = shareGpx;
 
 // ---------- Init ----------
