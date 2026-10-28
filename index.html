@@ -179,7 +179,7 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
 <body>
 <aside id="panel">
   <h1>🚴 Bike Tour Piemonte</h1>
-  <p class="sub">Percorsi per bici da corsa: niente autostrade, tangenziali o strade vietate alle bici.</p>
+  <p class="sub">Percorsi per bici da corsa: niente autostrade, tangenziali o strade vietate alle bici. <span style="opacity:.7">· Versione 28.10.3</span></p>
   <div id="installBox" hidden><span id="installText"></span><button id="installBtn" class="primary" hidden>📲 Installa</button><button id="installClose" title="Chiudi">✕</button></div>
   <nav class="views">
     <button data-view="plan" class="on">🗺️ Pianifica</button>
@@ -1168,7 +1168,9 @@ async function loopToLength(ll, dir, target, extra, k0, stale){
     if(!isFinite(nk) || nk <= 0) nk = k*target/len;
     nk = Math.min(Math.max(nk, k*0.4), k*2.5);
     prev = {k, len}; k = nk;
-    gj = await req(k); len = +gj.features[0].properties['track-length'];
+    // If the busy server turns a re-aim away, keep the best loop found so far
+    try{ gj = await req(k); }catch(e){ break; }
+    len = +gj.features[0].properties['track-length'];
     if(Math.abs(len-target) < Math.abs(best.len-target)) best = {gj, k, len};
   }
   return best;
@@ -1997,14 +1999,18 @@ async function propose(){
       - Math.abs(x.m.km*1000 - target)/target*60;
   });
   results.sort((a,b) => b.score-a.score);
-  // The requested distance is a promise: show only loops within ±10% whenever there are any
-  const near = x => Math.abs(x.m.km*1000 - target)/target <= 0.10;
-  const inRange = results.filter(near);
-  proposals = (inRange.length ? inRange : results).slice(0,4);
+  // The requested distance is a promise: within ±10% when possible, never beyond ±15%
+  const off = x => Math.abs(x.m.km*1000 - target)/target;
+  const inRange = results.filter(x => off(x) <= 0.10);
+  proposals = (inRange.length ? inRange : results.filter(x => off(x) <= 0.15)).slice(0,4);
+  if(!proposals.length){
+    $('#goalStatus').textContent = `Non sono riuscito a ottenere anelli da circa ${target/1000} km: il server dei percorsi (gratuito) è sovraccarico o la zona non lo permette. Riprova tra un minuto.`;
+    return;
+  }
 
   const pl = $('#goalGrade').selectedOptions[0].textContent.toLowerCase();
   let msg = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}” da circa ${target/1000} km` + (gradePref !== 'any' ? `, ${pl}.` : '.');
-  if(!inRange.length) msg += ` Nessun anello è venuto entro il 10% dei ${target/1000} km richiesti: ecco i più vicini.`;
+  if(!inRange.length) msg += ` Nessun anello è venuto entro il 10% dei ${target/1000} km richiesti: ecco i più vicini (massimo ±15%).`;
   if(minUp && !proposals.some(p => p.m.up >= minUp))
     msg += ` Con ${target/1000} km nessun anello arriva a ${minUp} m di dislivello partendo da qui: ecco i più vicini. Prova ad aumentare la distanza o a partire più vicino alle montagne.`;
   if(gradePref !== 'any' && !proposals.some(p => p.m.climbs && gradePrefScore(p.m) === 0))
@@ -2341,7 +2347,14 @@ try{ navigator.storage && navigator.storage.persist && navigator.storage.persist
 // ---------- Installable app (PWA) ----------
 // Offline shell; only when served from a web address (not when the file is opened from disk)
 if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // A newly published version takes over: reload once so the new page is shown, not the old one
+  const hadController = !!navigator.serviceWorker.controller;   // false on the very first visit
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if(reloaded || !hadController) return;
+    reloaded = true; location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').then(reg => reg.update()).catch(() => {});
 }
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);

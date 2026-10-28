@@ -1,6 +1,6 @@
 // Bike Tour Piemonte service worker: opens instantly and works offline for diary and saved rides.
 // Bump VERSION on every release so old caches are dropped.
-const VERSION = 'btp-2026-10-28b';
+const VERSION = 'btp-2026-10-28c';
 const SHELL = [
   './',
   './manifest.webmanifest',
@@ -27,9 +27,9 @@ self.addEventListener('fetch', e => {
   if(req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // The app page: always try the network first so updates show up straight away
+  // The app page: always ask the server (skipping the browser cache) so updates show up straight away
   if(req.mode === 'navigate'){
-    e.respondWith(fetch(req)
+    e.respondWith(fetch(req.url, {cache:'no-cache', credentials:'same-origin'})
       .then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put('./', copy)); return res; })
       .catch(() => caches.match('./')));
     return;
