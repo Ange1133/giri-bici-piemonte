@@ -1,6 +1,6 @@
 // Bike Tour Piemonte service worker: opens instantly and works offline for diary and saved rides.
 // Bump VERSION on every release so old caches are dropped.
-const VERSION = 'btp-2026-10-28c';
+const VERSION = 'btp-2026-10-28d';
 const SHELL = [
   './',
   './manifest.webmanifest',

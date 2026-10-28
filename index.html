@@ -179,7 +179,7 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
 <body>
 <aside id="panel">
   <h1>🚴 Bike Tour Piemonte</h1>
-  <p class="sub">Percorsi per bici da corsa: niente autostrade, tangenziali o strade vietate alle bici. <span style="opacity:.7">· Versione 28.10.3</span></p>
+  <p class="sub">Percorsi per bici da corsa: niente autostrade, tangenziali o strade vietate alle bici. <span style="opacity:.7">· Versione 28.10.4</span></p>
   <div id="installBox" hidden><span id="installText"></span><button id="installBtn" class="primary" hidden>📲 Installa</button><button id="installClose" title="Chiudi">✕</button></div>
   <nav class="views">
     <button data-view="plan" class="on">🗺️ Pianifica</button>
@@ -1182,6 +1182,8 @@ async function generateLoop(){
   // A loop chosen from the daily suggestions keeps its exact radius so it regenerates identically
   const keepK = state.loop.k && state.loop.km === target/1000 && state.loop.dir === dir ? state.loop.k : null;
   const elevParam = keepK && state.loop.elev === 0 ? '&profile:consider_elevation=0' : '';
+  const ptsParam = keepK && state.loop.pts ? '&roundTripPoints=' + state.loop.pts : '';
+  const keep = keepK ? {elev:state.loop.elev, pts:state.loop.pts} : {};
   state.loop = {km:target/1000, dir}; persist();
   const p = state.start, ll = p.lng.toFixed(6)+','+p.lat.toFixed(6);
   const seq = ++reqSeq;
@@ -1189,8 +1191,8 @@ async function generateLoop(){
   try{
     let gj;
     if(keepK){
-      gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(keepK)}&direction=${dir}${elevParam}`));
-      state.loop.k = keepK; if(elevParam) state.loop.elev = 0; persist();
+      gj = await fetchRoute(buildUrl(ll, `&engineMode=4&roundTripDistance=${Math.round(keepK)}&direction=${dir}${elevParam}${ptsParam}`));
+      Object.assign(state.loop, {k:keepK}, keep); persist();
     } else {
       gj = (await loopToLength(ll, dir, target, '', target/5.2, () => seq !== reqSeq)).gj;
     }
@@ -1792,6 +1794,7 @@ async function searchFor(key, q, res){
 // ---------- Controls ----------
 function syncControls(){
   $('#profile').value = state.profile; $('#alt').value = state.alt;
+  if(![...$('#loopDir').options].some(o => +o.value === state.loop.dir)) $('#loopDir').add(new Option(state.loop.dir + '°', state.loop.dir));
   $('#loopKm').value = state.loop.km; $('#loopDir').value = state.loop.dir;
   $('#tabP2P').classList.toggle('on', state.mode==='p2p'); $('#tabLoop').classList.toggle('on', state.mode==='loop');
   $('#p2pBox').hidden = state.mode!=='p2p'; $('#loopBox').hidden = state.mode!=='loop';
@@ -1974,10 +1977,14 @@ async function propose(){
         const job = queue.shift();
         try{
           // Ignoring elevation the loops follow the valleys and come out about twice as long
-          const fit = await loopToLength(ll, job.dir, job.target, elevParam, job.target/(elev ? 5.2 : 9), () => seq !== propSeq);
+          const ptsParam = job.pts ? `&roundTripPoints=${job.pts}` : '';
+          const fit = await loopToLength(ll, job.dir, job.target, elevParam + ptsParam, job.target/(elev ? 5.2 : 9), () => seq !== propSeq);
           if(seq !== propSeq) return;
           const r = parseRoute(fit.gj); r.stats = analyze(r);
-          results.push({name:job.name, dir:job.dir, target:job.target, k:Math.round(fit.k), elev, r, m:metrics(r)});
+          const m = metrics(r);
+          // Variants sometimes come back as the very same loop: keep one
+          if(!results.some(x => Math.abs(x.m.km-m.km) < 1 && Math.abs(x.m.up-m.up) < 30))
+            results.push({name:job.name, dir:job.dir, pts:job.pts, target:job.target, k:Math.round(fit.k), elev, r, m});
         }catch(e){ lastErr = e.message; failed.push(job); }
         done++; if(seq === propSeq) status();
       }
@@ -1990,6 +1997,22 @@ async function propose(){
   await run(DIRS.map(([name, dir]) => ({name, dir, target})), 'Provo gli anelli nelle varie direzioni…');
   if(seq !== propSeq) return;
 
+  // Climbing day: the router does not look for hills, so if too few loops reach the minimum
+  // climbing, try variants around the two hilliest directions (turned ±20°, fewer/more turning points)
+  const off = x => Math.abs(x.m.km*1000 - target)/target;
+  const qualifies = x => x.m.up >= minUp && off(x) <= 0.15;
+  if(minUp && results.length && results.filter(qualifies).length < 4){
+    const hilly = results.slice().sort((a,b) => b.m.upKm - a.m.upKm).slice(0,2);
+    const jobs = hilly.flatMap(x => [
+      {name:x.name+' (variante)', dir:(x.dir+340)%360, target},
+      {name:x.name+' (variante)', dir:(x.dir+20)%360, target},
+      {name:x.name+' (variante)', dir:x.dir, pts:3, target},
+      {name:x.name+' (variante)', dir:x.dir, pts:7, target},
+    ]);
+    await run(jobs, `Cerco altri giri con almeno ${minUp} m di dislivello…`);
+    if(seq !== propSeq) return;
+  }
+
   $('#goalGo').disabled = false;
   if(!results.length){ $('#goalStatus').textContent = lastErr || 'Il server dei percorsi non risponde: riprova tra poco.'; return; }
   results.forEach(x => {
@@ -2000,19 +2023,28 @@ async function propose(){
   });
   results.sort((a,b) => b.score-a.score);
   // The requested distance is a promise: within ±10% when possible, never beyond ±15%
-  const off = x => Math.abs(x.m.km*1000 - target)/target;
   const inRange = results.filter(x => off(x) <= 0.10);
-  proposals = (inRange.length ? inRange : results.filter(x => off(x) <= 0.15)).slice(0,4);
+  let pool = inRange.length ? inRange : results.filter(x => off(x) <= 0.15);
+  // So is the minimum climbing: show only loops that reach it
+  let belowMin = false;
+  if(minUp){
+    const ok = pool.filter(x => x.m.up >= minUp);
+    if(ok.length) pool = ok;
+    else { belowMin = true; pool = pool.slice().sort((a,b) => b.m.up - a.m.up).slice(0,2); }
+  }
+  proposals = pool.slice(0,4);
   if(!proposals.length){
     $('#goalStatus').textContent = `Non sono riuscito a ottenere anelli da circa ${target/1000} km: il server dei percorsi (gratuito) è sovraccarico o la zona non lo permette. Riprova tra un minuto.`;
     return;
   }
 
   const pl = $('#goalGrade').selectedOptions[0].textContent.toLowerCase();
-  let msg = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}” da circa ${target/1000} km` + (gradePref !== 'any' ? `, ${pl}.` : '.');
+  let msg = `${results.length} anelli analizzati: ecco i più adatti per “${g.label}” da circa ${target/1000} km` + (minUp && !belowMin ? ` e almeno ${minUp} m di dislivello` : '') + (gradePref !== 'any' ? `, ${pl}.` : '.');
   if(!inRange.length) msg += ` Nessun anello è venuto entro il 10% dei ${target/1000} km richiesti: ecco i più vicini (massimo ±15%).`;
-  if(minUp && !proposals.some(p => p.m.up >= minUp))
-    msg += ` Con ${target/1000} km nessun anello arriva a ${minUp} m di dislivello partendo da qui: ecco i più vicini. Prova ad aumentare la distanza o a partire più vicino alle montagne.`;
+  if(belowMin)
+    msg = `⚠ Con ${target/1000} km nessun anello da qui arriva a ${minUp} m di dislivello: questi due sono quelli che ci vanno più vicino. Prova ad aumentare la distanza, abbassare il dislivello minimo o partire più vicino alle montagne.`;
+  else if(minUp && proposals.length < 4)
+    msg += ` Solo ${proposals.length === 1 ? 'questo anello supera' : 'questi ' + proposals.length + ' anelli superano'} i ${minUp} m.`;
   if(gradePref !== 'any' && !proposals.some(p => p.m.climbs && gradePrefScore(p.m) === 0))
     msg += ' Nessun anello trovato rispetta esattamente la pendenza scelta: ecco i più vicini.';
   $('#goalStatus').textContent = msg;
@@ -2105,7 +2137,7 @@ function highlightProposal(i, zoom){
 function useProposal(i, g){
   const p = proposals[i];
   state.mode = 'loop';
-  state.loop = {km:Math.round(p.target/1000), dir:p.dir, k:p.k, elev:p.elev};
+  state.loop = {km:Math.round(p.target/1000), dir:p.dir, k:p.k, elev:p.elev, pts:p.pts};
   $('#rname').value = `${g.label} – anello verso ${p.name}`;
   persist(); syncControls(); setPick(null); renderWaypoints();
   showView('plan');
