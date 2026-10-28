@@ -2,8 +2,16 @@
 <html lang="it">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Giri in Bici Piemonte</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#7fd1c4">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bike Tour">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>Bike Tour Piemonte</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -26,6 +34,12 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
+/* Installed on a phone the page runs edge to edge: keep clear of the notch and home bar */
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#installBox{display:flex;gap:8px;align-items:center;background:var(--chip);border-radius:10px;padding:8px 10px;margin:0 0 10px;font-size:12.5px}
+#installBox[hidden]{display:none}
+#installBox span{flex:1}
+#installBox button{flex:none;padding:4px 10px}
 body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;overflow:hidden}
 #panel{width:380px;flex:none;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:14px 16px 40px}
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -159,8 +173,9 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
 </head>
 <body>
 <aside id="panel">
-  <h1>🚴 Giri in Bici Piemonte</h1>
+  <h1>🚴 Bike Tour Piemonte</h1>
   <p class="sub">Percorsi per bici da corsa: niente autostrade, tangenziali o strade vietate alle bici.</p>
+  <div id="installBox" hidden><span id="installText"></span><button id="installBtn" class="primary" hidden>📲 Installa</button><button id="installClose" title="Chiudi">✕</button></div>
   <nav class="views">
     <button data-view="plan" class="on">🗺️ Pianifica</button>
     <button data-view="today">💡 Oggi</button>
@@ -270,6 +285,7 @@ textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7
     <label>Nome del giro</label>
     <input id="rname" type="text" placeholder="es. Langhe da Alba">
     <div class="row" style="margin-top:8px"><button class="primary" id="gpx" disabled>⬇ Scarica GPX</button><button id="save" disabled>💾 Salva</button></div>
+    <button id="shareGpx" disabled hidden style="width:100%;margin-top:6px">📤 Invia il GPX a iGPSport o a un'altra app</button>
     <button id="toDiary" disabled style="width:100%;margin-top:6px">📒 L'ho fatto: registralo nel diario</button>
     <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="waterGpx" type="checkbox" style="width:auto" checked> 💧 Includi le fontane nel file (al massimo una ogni 2 km)</label>
     <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input id="simplify" type="checkbox" style="width:auto"> Riduci i punti della traccia (file più leggero)</label>
@@ -1306,7 +1322,7 @@ function clearRoute(){
   ['#sKm','#sUp','#sDown','#sTime','#sMax','#sGrade'].forEach(s => $(s).textContent='–');
   $('#surfBars').innerHTML = '<p class="hint">Calcola un percorso per vedere il tipo di terreno.</p>';
   $('#roadBars').innerHTML = $('#warnings').innerHTML = $('#climbs').innerHTML = '<p class="hint">–</p>';
-  $('#gpx').disabled = $('#save').disabled = $('#toDiary').disabled = $('#tcx').disabled = true;
+  $('#gpx').disabled = $('#save').disabled = $('#toDiary').disabled = $('#tcx').disabled = $('#shareGpx').disabled = true;
   waterSeq++; renderWater();
   $('#loopEdit').disabled = true;
   drawChart();
@@ -1319,7 +1335,7 @@ function setRoute(r){
   const b = L.latLngBounds(r.pts.map(p => [p.lat,p.lng]));
   const vb = map.getBounds();
   if(currentView==='plan' && (!vb.contains(b) || map.getZoom() < 10)) map.fitBounds(b, {padding:[40,40]});
-  $('#gpx').disabled = $('#save').disabled = $('#toDiary').disabled = $('#tcx').disabled = false;
+  $('#gpx').disabled = $('#save').disabled = $('#toDiary').disabled = $('#tcx').disabled = $('#shareGpx').disabled = false;
   loadFountains(r);
 }
 
@@ -1512,17 +1528,32 @@ function waterForExport(){
 }
 const kmTxt = d => (d/1000).toFixed(1).replace('.',',');
 
-function downloadGpx(){
-  if(!route) return;
+function buildGpx(){
   const name = routeName(), pts = exportPts(), s = route.stats, water = waterForExport();
-  let g = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Giri in Bici Piemonte" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>${esc(name)}</name><desc>${(route.total/1000).toFixed(1)} km, +${Math.round(s.up)} m</desc></metadata>\n`;
+  let g = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Bike Tour Piemonte" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>${esc(name)}</name><desc>${(route.total/1000).toFixed(1)} km, +${Math.round(s.up)} m</desc></metadata>\n`;
   // Water points as standard GPX waypoints
   g += water.map(f => `<wpt lat="${f.lat.toFixed(6)}" lon="${f.lng.toFixed(6)}"><ele>${eleAt(route, f.d).toFixed(1)}</ele><name>Acqua km ${kmTxt(f.d)}</name><desc>${esc(f.label)}${f.off>15 ? ', a '+Math.round(f.off)+' m dal percorso' : ''}</desc><sym>Drinking Water</sym><type>Water</type></wpt>\n`).join('');
   g += `<trk><name>${esc(name)}</name><type>cycling</type><trkseg>\n`;
   g += pts.map(p => `<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lng.toFixed(6)}"><ele>${p.ele.toFixed(1)}</ele></trkpt>`).join('\n');
   g += `\n</trkseg></trk>\n</gpx>\n`;
-  saveFile(g, 'application/gpx+xml', fileName(name, '.gpx'));
-  setStatus(`GPX scaricato (${pts.length} punti${water.length ? ', ' + water.length + ' fontane' : ''}).`);
+  return {text:g, file:fileName(name, '.gpx'), info:`${pts.length} punti${water.length ? ', ' + water.length + ' fontane' : ''}`};
+}
+function downloadGpx(){
+  if(!route) return;
+  const g = buildGpx();
+  saveFile(g.text, 'application/gpx+xml', g.file);
+  setStatus(`GPX scaricato (${g.info}).`);
+}
+// On phones: hand the GPX straight to another app (iGPSport, Strava…) through the share sheet
+const gpxFileFor = g => new File([g.text], g.file, {type:'application/gpx+xml'});
+const canShareGpx = (() => { try{ return !!(navigator.canShare && navigator.canShare({files:[gpxFileFor({text:'', file:'x.gpx'})]})); }catch(e){ return false; } })();
+async function shareGpx(){
+  if(!route) return;
+  const g = buildGpx();
+  try{
+    await navigator.share({files:[gpxFileFor(g)], title:routeName()});
+    setStatus('GPX condiviso.');
+  }catch(e){ if(e.name !== 'AbortError') setStatus('Condivisione non riuscita: usa “Scarica GPX”.', true); }
 }
 
 // TCX "course" with Water course points: the format many bike computers use for on-route alerts
@@ -2280,6 +2311,40 @@ $('#bkImport').onchange = async e => {
 
 // Ask the browser not to evict our data when space runs low
 try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
+
+// ---------- Installable app (PWA) ----------
+// Offline shell; only when served from a web address (not when the file is opened from disk)
+if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let installPrompt = null;
+function showInstall(text, withButton){
+  if(standalone || store.get('installDismissed', false)) return;
+  $('#installText').textContent = text;
+  $('#installBtn').hidden = !withButton;
+  $('#installBox').hidden = false;
+}
+// Android / Chrome / Edge: the browser offers a real install dialog
+addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); installPrompt = e;
+  showInstall('Installa Bike Tour Piemonte sul telefono: si apre come un\'app, a schermo intero.', true);
+});
+$('#installBtn').onclick = async () => {
+  if(!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice.catch(() => {});
+  installPrompt = null; $('#installBox').hidden = true;
+};
+addEventListener('appinstalled', () => { $('#installBox').hidden = true; });
+// iPhone / iPad: Safari has no install button, so explain the two taps
+if(isIOS && /^https?:$/.test(location.protocol)) showInstall('Per installarla: tocca Condividi ⬆️ in Safari e poi “Aggiungi alla schermata Home”.', false);
+$('#installClose').onclick = () => { $('#installBox').hidden = true; store.set('installDismissed', true); };
+
+// Share sheet for the GPX, where the phone supports sharing files
+$('#shareGpx').hidden = !canShareGpx;
+$('#shareGpx').onclick = shareGpx;
 
 // ---------- Init ----------
 state.vias = state.vias.filter(has);
